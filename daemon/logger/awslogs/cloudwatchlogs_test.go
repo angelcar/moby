@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -355,13 +356,76 @@ func TestLogNonBlockingBufferFull(t *testing.T) {
 	<-started
 	select {
 	case err := <-errorCh:
-		if err == nil {
-			t.Fatal("Expected non-nil error")
-		}
+		assert.NilError(t, err)
+		assert.Equal(t, int32(1), stream.discardedMessages, "Expected a discarded message")
 	case <-time.After(30 * time.Second):
 		t.Fatal("Expected Log call to not block")
 	}
 }
+
+func TestReportDiscardedMessages(t *testing.T) {
+	mockClient := newMockClient()
+	stream := &logStream{
+		client:            mockClient,
+		logGroupName:      groupName,
+		logStreamName:     streamName,
+		messages:          make(chan *logger.Message, 1),
+		logNonBlocking:    true,
+		maxBufferedEvents: 0,
+	}
+
+	stream.Log(&logger.Message{})
+	stream.Log(&logger.Message{}) // This one should be discarded
+
+	logMessagesDiscardedWarningInvoked := false
+	logMessagesDiscardedWarningBkp := logMessagesDiscardedWarning
+	defer func() {
+		logMessagesDiscardedWarning = logMessagesDiscardedWarningBkp
+	}()
+	logMessagesDiscardedWarning = func(logGroupName, logStreamName string, maxBufferedEvents int, discarded int32) {
+		logMessagesDiscardedWarningInvoked = true
+		assert.Equal(t, groupName, logGroupName, "Wrong logGroupName was received")
+		assert.Equal(t, streamName, logStreamName, "Wrong logStreamName was received")
+		assert.Equal(t, 0, maxBufferedEvents, "Wrong maxBufferedEvents was received")
+		assert.Equal(t, int32(1), discarded, "Expected one message discarded")
+	}
+
+	ticks := make(chan time.Time)
+	newTicker = func(_ time.Duration) *time.Ticker {
+		return &time.Ticker{
+			C: ticks,
+		}
+	}
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		close(started)
+		stream.reportDiscardedMessages()
+		close(finished)
+	}()
+	<-started
+
+	// Check the counter isn't reset before the tick
+	assert.Equal(t, int32(1), atomic.LoadInt32(&stream.discardedMessages), "Expected a discarded message")
+
+	select {
+	case ticks <- time.Time{}:
+		stream.Close()
+	case <-time.After(time.Second * 5):
+		t.Fatal("reportDiscardedMessages didn't process the tick")
+	}
+
+	select {
+	case <-finished:
+	case <-time.After(time.Second * 5):
+		t.Fatal("reportDiscardedMessages didn't exit")
+	}
+
+	assert.Equal(t, true, logMessagesDiscardedWarningInvoked, "Expected logMessagesDiscardedWarningInvoked to be invoked")
+	// Check the counter is reset after the tick
+	assert.Equal(t, int32(0), atomic.LoadInt32(&stream.discardedMessages), "Expected the discardedMessages counter to be zero")
+}
+
 func TestPublishBatchSuccess(t *testing.T) {
 	mockClient := newMockClient()
 	stream := &logStream{

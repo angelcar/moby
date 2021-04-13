@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -74,11 +75,13 @@ type logStream struct {
 	logNonBlocking     bool
 	forceFlushInterval time.Duration
 	multilinePattern   *regexp.Regexp
+	maxBufferedEvents  int
 	client             api
 	messages           chan *logger.Message
 	lock               sync.RWMutex
 	closed             bool
 	sequenceToken      *string
+	discardedMessages  int32
 }
 
 type logStreamConfig struct {
@@ -154,12 +157,15 @@ func New(info logger.Info) (logger.Logger, error) {
 		logNonBlocking:     containerStreamConfig.logNonBlocking,
 		forceFlushInterval: containerStreamConfig.forceFlushInterval,
 		multilinePattern:   containerStreamConfig.multilinePattern,
+		maxBufferedEvents:  containerStreamConfig.maxBufferedEvents,
 		client:             client,
 		messages:           make(chan *logger.Message, containerStreamConfig.maxBufferedEvents),
 	}
 
 	creationDone := make(chan bool)
 	if containerStream.logNonBlocking {
+		go containerStream.reportDiscardedMessages()
+
 		go func() {
 			backoff := 1
 			maxBackoff := 32
@@ -407,9 +413,7 @@ func (l *logStream) BufSize() int {
 
 // Log submits messages for logging by an instance of the awslogs logging driver
 func (l *logStream) Log(msg *logger.Message) error {
-	l.lock.RLock()
-	defer l.lock.RUnlock()
-	if l.closed {
+	if l.isClosed() {
 		return errors.New("awslogs is closed")
 	}
 	if l.logNonBlocking {
@@ -417,11 +421,19 @@ func (l *logStream) Log(msg *logger.Message) error {
 		case l.messages <- msg:
 			return nil
 		default:
-			return errors.New("awslogs buffer is full")
+			atomic.AddInt32(&l.discardedMessages, 1)
+			return nil
 		}
 	}
 	l.messages <- msg
 	return nil
+}
+
+// isClosed returns true if this logStream is closed (i.e Close() has been invoked)
+func (l *logStream) isClosed() bool {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+	return l.closed
 }
 
 // Close closes the instance of the awslogs logging driver
@@ -511,6 +523,39 @@ func (l *logStream) createLogStream() error {
 // that the implementation can be swapped out for unit tests.
 var newTicker = func(freq time.Duration) *time.Ticker {
 	return time.NewTicker(freq)
+}
+
+var logMessagesDiscardedWarning = func(logGroupName, logStreamName string, maxBufferedEvents int, discarded int32) {
+	logrus.WithFields(logrus.Fields{
+		"driver":             name,
+		"logGroupName":       logGroupName,
+		"logStreamName":      logStreamName,
+		"messagesDiscarded":  discarded,
+		maxBufferedEventsKey: maxBufferedEvents,
+	}).Warn("awslogs buffer is full; log messages were discarded")
+}
+
+func (l *logStream) warnIfMessagesDiscarded() {
+	if oldVal := atomic.SwapInt32(&l.discardedMessages, 0); oldVal > 0 {
+		logMessagesDiscardedWarning(l.logGroupName, l.logStreamName, l.maxBufferedEvents, oldVal)
+	}
+}
+
+// reportDiscardedMessages periodically checks discardedMessages counter, logging a warning if it's greater than zero.
+// The warning can be useful for the user to realize that container logs are being discarded. Container logs will be
+// discarded when this driver is configured in non-blocking mode and logs arrive faster than they can be processed
+// (i.e. sent to CloudWatch).
+func (l *logStream) reportDiscardedMessages() {
+	ticker := newTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		l.warnIfMessagesDiscarded()
+		if l.isClosed() { // If logger is closed we are done
+			// make sure we report remaining discarded messages
+			l.warnIfMessagesDiscarded()
+			return
+		}
+	}
 }
 
 // collectBatch executes as a goroutine to perform batching of log events for
