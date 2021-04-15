@@ -2,12 +2,16 @@ package logger // import "github.com/docker/docker/daemon/logger"
 
 import (
 	"context"
+	"errors"
+	"io/ioutil"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
-type mockLogger struct{ c chan *Message }
+type mockLogger struct{c chan *Message }
 
 func (l *mockLogger) Log(msg *Message) error {
 	l.c <- msg
@@ -145,11 +149,13 @@ func TestRingDrain(t *testing.T) {
 
 }
 
-type nopLogger struct{}
+type nopLogger struct{
+	logErr error
+}
 
-func (nopLogger) Name() string       { return "nopLogger" }
-func (nopLogger) Close() error       { return nil }
-func (nopLogger) Log(*Message) error { return nil }
+func (*nopLogger) Name() string       { return "nopLogger" }
+func (*nopLogger) Close() error       { return nil }
+func (l *nopLogger) Log(*Message) error { return l.logErr  }
 
 func BenchmarkRingLoggerThroughputNoReceiver(b *testing.B) {
 	mockLog := &mockLogger{make(chan *Message)}
@@ -166,7 +172,8 @@ func BenchmarkRingLoggerThroughputNoReceiver(b *testing.B) {
 }
 
 func BenchmarkRingLoggerThroughputWithReceiverDelay0(b *testing.B) {
-	l := NewRingLogger(nopLogger{}, Info{}, -1)
+	logrus.SetOutput(ioutil.Discard)
+	l := NewRingLogger(&nopLogger{}, Info{}, -1)
 	msg := &Message{Line: []byte("hello humans and everyone else!")}
 	b.SetBytes(int64(len(msg.Line)))
 
@@ -175,7 +182,21 @@ func BenchmarkRingLoggerThroughputWithReceiverDelay0(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+	//l.Close()
 }
+
+func BenchmarkRingLoggerThroughputWithLoggerError(b *testing.B) {
+	logrus.SetOutput(ioutil.Discard)
+	l := NewRingLogger(&nopLogger{errors.New("mock error")}, Info{}, -1)
+	msg := &Message{Line: []byte("hello humans and everyone else!")}
+	b.SetBytes(int64(len(msg.Line)))
+
+	for i := 0; i < b.N; i++ {
+		l.Log(msg)
+	}
+	//l.Close()
+}
+
 
 func consumeWithDelay(delay time.Duration, c <-chan *Message) (cancel func()) {
 	started := make(chan struct{})
