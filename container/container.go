@@ -411,6 +411,9 @@ func (container *Container) StartLogger() (logger.Logger, error) {
 		return nil, err
 	}
 
+	// Wrap log driver with logger that reports logging errors every minute
+	l = logger.WithLogErrorReporter(l, info)
+
 	if containertypes.LogMode(cfg.Config["mode"]) == containertypes.LogModeNonBlock {
 		bufferSize := int64(-1)
 		if s, exists := cfg.Config["max-buffer-size"]; exists {

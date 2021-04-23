@@ -4,8 +4,6 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
-
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -104,10 +102,6 @@ func (r *RingLogger) Close() error {
 		}
 
 		if err := r.l.Log(msg); err != nil {
-			logrus.WithField("driver", r.l.Name()).
-				WithField("container", r.logInfo.ContainerID).
-				WithError(err).
-				Errorf("Error writing log message")
 			logErr = true
 		}
 	}
@@ -127,12 +121,7 @@ func (r *RingLogger) run() {
 			// buffer is closed
 			return
 		}
-		if err := r.l.Log(msg); err != nil {
-			logrus.WithField("driver", r.l.Name()).
-				WithField("container", r.logInfo.ContainerID).
-				WithError(err).
-				Errorf("Error writing log message")
-		}
+		r.l.Log(msg)
 	}
 }
 

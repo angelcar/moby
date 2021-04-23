@@ -125,10 +125,7 @@ func (c *Copier) copySrc(name string, src io.Reader) {
 						msg.Timestamp = partialTS
 					}
 
-					if logErr := c.dst.Log(msg); logErr != nil {
-						logWritesFailedCount.Inc(1)
-						logrus.Errorf("Failed to log msg %q for logger %s: %s", msg.Line, c.dst.Name(), logErr)
-					}
+					c.dst.Log(msg)
 				}
 				p += q + 1
 			}
@@ -158,10 +155,7 @@ func (c *Copier) copySrc(name string, src io.Reader) {
 					ordinal++
 					hasMorePartial = true
 
-					if logErr := c.dst.Log(msg); logErr != nil {
-						logWritesFailedCount.Inc(1)
-						logrus.Errorf("Failed to log msg %q for logger %s: %s", msg.Line, c.dst.Name(), logErr)
-					}
+					c.dst.Log(msg)
 					p = 0
 					n = 0
 				}
