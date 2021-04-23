@@ -127,7 +127,6 @@ func (c *Copier) copySrc(name string, src io.Reader) {
 
 					if logErr := c.dst.Log(msg); logErr != nil {
 						logWritesFailedCount.Inc(1)
-						logrus.Errorf("Failed to log msg %q for logger %s: %s", msg.Line, c.dst.Name(), logErr)
 					}
 				}
 				p += q + 1
@@ -160,7 +159,6 @@ func (c *Copier) copySrc(name string, src io.Reader) {
 
 					if logErr := c.dst.Log(msg); logErr != nil {
 						logWritesFailedCount.Inc(1)
-						logrus.Errorf("Failed to log msg %q for logger %s: %s", msg.Line, c.dst.Name(), logErr)
 					}
 					p = 0
 					n = 0

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/docker/docker/daemon/logger/loggerutils"
 	"io"
 	"os"
 	"path/filepath"
@@ -440,7 +441,7 @@ func (container *Container) StartLogger() (logger.Logger, error) {
 			}
 		}
 	}
-	return l, nil
+	return loggerutils.WithDroppedLogsReporter(l, info), nil
 }
 
 // GetProcessLabel returns the process label for the container.
